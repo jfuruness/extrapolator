@@ -1,0 +1,75 @@
+[project]
+name = "extrapolator"
+version = "0.0.0"
+description = "Runs extrapolation to determine accuracy of a simulation"
+readme = "README.md"
+authors = [
+    {name = "Justin Furuness", email = "jfuruness@gmail.com"},
+]
+license = {file = "LICENSE.txt"}
+keywords = [
+    "Furuness",
+    "BGP",
+    "Hijack",
+    "ROA",
+    "ROV",
+    "AS",
+    "Extrapolator",
+    "BGPy",
+]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3"
+]
+requires-python = ">=3.10"
+dependencies = [
+]
+
+[project.urls]
+homepage = "https://github.com/jfuruness/extrapolator.git"
+
+
+[project.optional-dependencies]
+test = [
+]
+
+[tool.setuptools.package-data]
+extrapolator = ["py.typed"]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[project.scripts]
+extrapolator = "extrapolator.__main__:main"
+
+[tool.pytest.ini_options]
+python_files = "test*"
+python_classes = "Test*"
+python_functions = "test*"
+filterwarnings = [
+    "ignore::urllib3.exceptions.InsecureRequestWarning"
+]
+markers = [
+    "slow: All slow tests"
+]
+
+[tool.mypy]
+mypy_path = "extrapolator"
+check_untyped_defs = true
+disallow_any_generics = true
+ignore_missing_imports = true
+no_implicit_optional = true
+show_error_codes = true
+strict_equality = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+no_implicit_reexport = true
