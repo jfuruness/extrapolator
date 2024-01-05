@@ -29,13 +29,30 @@ class Extrapolator:
         # Get the top 10 vantage points to use
         # These must have over 800k prefixes, have num_ans == num_prefixes, and
         # we sort by AS rank
-        top_vantage_points = self._get_top_vantage_points(collector, 10)
+        top_vantage_points, relevant_paths = self._get_top_vantage_points(collector, 10)
         # Get the unique intersecting set of prefix IDs at each top vantage point
         # that don't have path poisoning
         joint_prefix_ids = self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
         )
+        relevant_paths = self.get_relevant_paths(collector)
         for top_vantage_point in top_vantage_points:
+            """
+                    //input: vector of dir strings, max_block_id, max_prefix_block_id, prefix_ids (set), vantage_point_asn
+                    //for each block id in max_block_id:
+                    //  announcements = vector()
+                    //  for each dir in dir_strings:
+                    //    get announcements from dir/block_id
+                    //  final_announcements = vector()
+                    //  for announcement in announcements:
+                    //    if announcement.prefix_id (NOT prefix_block_id) in prefix_ids:
+                    //      final_announcements.push_back(prefix_block_id)
+                    //  engine = Engine()
+                    //  engine.setup(final_announcements)
+                    //  engine.run()
+                    //  THIS MUST APPEND!!! Can't erase anything!!!
+                    //  engine.local_ribs_to_csv([vantage_point_asn])
+            """
             raise NotImplementedError(
                 "for each vantage point, "
                 "ingest anns"
@@ -50,7 +67,7 @@ class Extrapolator:
 
         raise NotImplementedError("add top vantage point data to appropriate ppt slide")
         raise NotImplementedError("add to ppt the levenshtein distance")
-
+        raise NotImplementedError("Must deal with seeding conflicts")
         raise NotImplementedError(
             "remove stubs other than vantage point ASN assuming seeing along path is better"
             "and for origin only seeding, if the stub is missing seed it one higher"
@@ -182,3 +199,19 @@ class Extrapolator:
                         set(inner_dict["no_path_poisoning_prefix_ids_set"])
                     )
             return tuple(list(sorted(joint_prefix_ids)))
+
+    def get_relevant_paths(self, collector: MRTCollector) -> list[str]:
+
+        mrt_files = collector.get_mrt_files()
+        dir_to_tsv_paths = dict()
+        for mrt_file in mrt_files:
+            dir_to_tsv_paths[str(mrt_file.formatted_dir)] = list()
+            for formatted_path in (
+                mrt_file.formatted_dir / str(max_block_size)
+                    ).glob("*.tsv"):
+                dir_to_tsv_paths[str(mrt_file.formatted_dir)].append(
+                    str(formatted_path)
+                )
+
+        print("Getting relevant paths")
+        return mrtc.get_relevant_paths(dir_to_tsv_paths)
