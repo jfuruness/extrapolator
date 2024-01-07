@@ -1,8 +1,12 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
+from tempfile import TemporaryDirectory
 import json
-from tqdm import tqdm
 from typing import Any
+
+from tqdm import tqdm
+
+from bgpy.bgpc import extrapolate
 
 from mrt_collector import MRTCollector
 from mrt_collector.mrt_collector import get_vantage_point_json
@@ -11,6 +15,7 @@ from mrt_collector.mrt_collector import get_vantage_point_json
 class Extrapolator:
     def __init__(self, max_block_size: int = 1000):
         self.max_block_size: int = max_block_size
+        self.temp_dir: Path = Path(TemporaryDirectory())
 
     def run(self):
         """See steps below
@@ -35,32 +40,41 @@ class Extrapolator:
         joint_prefix_ids = self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
         )
-        relevant_paths = self.get_relevant_paths(collector)
+
+        dirs = self._get_relevant_dirs(collector)
+        max_block_id = self._get_max_block_id(dirs)
         for top_vantage_point in top_vantage_points:
-            """
-                    //input: vector of dir strings, max_block_id, max_prefix_block_id, prefix_ids (set), vantage_point_asn
-                    //for each block id in max_block_id:
-                    //  announcements = vector()
-                    //  for each dir in dir_strings:
-                    //    get announcements from dir/block_id
-                    //  final_announcements = vector()
-                    //  for announcement in announcements:
-                    //    if announcement.prefix_id (NOT prefix_block_id) in prefix_ids:
-                    //      final_announcements.push_back(prefix_block_id)
-                    //  engine = Engine()
-                    //  engine.setup(final_announcements)
-                    //  engine.run()
-                    //  THIS MUST APPEND!!! Can't erase anything!!!
-                    //  engine.local_ribs_to_csv([vantage_point_asn])
-            """
-            raise NotImplementedError(
-                "for each vantage point, "
-                "ingest anns"
-                "   only for the relevant prefix ids"
-                "   and excluding any where the vantage point is the first ASN in the path"
-                "propagate"
-                "   output only the vantage point ASN"
-            )
+            for block_id in range(max_block_id + 1):
+                tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
+                out_path = self._get_block_id_guess_path(top_vantage_point, block_id)
+                extrapolate(
+                    tsv_path=[str(x) for x in tsv_paths],
+                    prefix_ids=joint_prefix_ids,
+                    max_prefix_block_id=self.max_block_size,
+                    output_asns=[top_vantage_point_asn],
+                    out_path=str(out_path),
+                )
+                """
+                        //extrapolate(tsv_path, prefix_ids, max_prefix_block_id, output_asns)
+                        //  engine = Engine()
+                        //  announcements = get_announcements_to_extrapolate(tsv_paths, prefix_ids)
+                        //  engine.setup(final_announcements)
+                        //  engine.run()
+                        //  THIS MUST APPEND!!! Can't erase anything!!!
+                        //  engine.local_ribs_to_csv(output_asns, out_path)
+                        //
+                        // get_announcements_to_extrapolate(tsv_paths, prefix_ids)
+                        //   announcements_to_extrapolate = vector()
+                        //   for each path in tsv_paths
+                        //     path_anns = get announcements from path using the function
+                        //     for ann in path_anns:
+                        //        if ann.prefix_id (NOT prefix_block_id) in prefix_ids:
+                        //            announcements_to_extrapolate.push_back(ann)
+                        //   return announcements_to_extrapolate
+                """
+
+            raise NotImplementedError("Concatenate with header")
+            raise NotImplementedError("multiprocess with limited cores")
             print("go do pw rn while this is running")
             raise NotImplementedError("calculate levenshtein distance")
         raise NotImplementedError("statistical significance")
@@ -200,18 +214,36 @@ class Extrapolator:
                     )
             return tuple(list(sorted(joint_prefix_ids)))
 
-    def get_relevant_paths(self, collector: MRTCollector) -> list[str]:
+    def _get_relevant_dirs(self, collector: MRTCollector) -> list[Path]:
+        """Gets all MRT directories"""
 
         mrt_files = collector.get_mrt_files()
-        dir_to_tsv_paths = dict()
-        for mrt_file in mrt_files:
-            dir_to_tsv_paths[str(mrt_file.formatted_dir)] = list()
-            for formatted_path in (
-                mrt_file.formatted_dir / str(max_block_size)
-                    ).glob("*.tsv"):
-                dir_to_tsv_paths[str(mrt_file.formatted_dir)].append(
-                    str(formatted_path)
-                )
+        mrt_files = tuple([x for x in mrt_files if x.unique_prefixes_path.exists()])
+        return [x.formatted_dir for x in mrt_files]
 
-        print("Getting relevant paths")
-        return mrtc.get_relevant_paths(dir_to_tsv_paths)
+    def _get_max_block_id(self, dirs: list[Path]) -> int:
+        """Input is MRT directories. Output is max file number"""
+
+        max_block_id = 0
+        for dir_ in dirs:
+            count = len(list((dir_ / str(self.max_block_size)).glob("*.tsv")))
+            if count > max_block_id:
+                max_block_id = count
+        return max_block_id
+
+    def _get_tsv_paths_for_block_id(
+        self, dirs: list[Path], block_id: int
+    ) -> list[Path]:
+        """Returns TSV paths for a given block ID"""
+
+        paths = list()
+        for dir_ in dirs:
+            path = dir_ / str(self.max_prefix_block_id) / f"{block_id}.tsv"
+            assert path.exists(), path
+            paths.append(path)
+        return paths
+
+    def _get_block_id_guess_path(self, vantage_point: int, block_id: int) -> Path:
+        path = self.temp_dir / str(vantage_point) / "guess" / "temp" / f"{block_id}.tsv"
+        path.parent.mkdir(exist_ok=True, parents=True)
+        return path
