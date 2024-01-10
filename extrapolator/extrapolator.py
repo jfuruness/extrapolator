@@ -1,7 +1,8 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
-from tempfile import TemporaryDirectory
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from tqdm import tqdm
@@ -55,12 +56,12 @@ class Extrapolator:
                     tsv_paths=[str(x) for x in tsv_paths],
                     origin_only_seeding=True,
                     valid_seed_asns=non_stub_asns,
-                    omitted_vantage_point_asns=set([top_vantage_point])
+                    omitted_vantage_point_asns=set([top_vantage_point]),
                     valid_prefix_ids=joint_prefix_ids,
                     max_prefix_block_id=self.max_block_size,
-                    output_asns=[top_vantage_point_asn],
+                    output_asns=[top_vantage_point],
                     out_path=str(out_path),
-                    non_default_asn_cls_str_dict=dict()
+                    non_default_asn_cls_str_dict=dict(),
                     caida_tsv_path=caida_tsv_path,
                 )
                 raise NotImplementedError("modify and use local_ribs_to_tsv_func")
@@ -244,9 +245,10 @@ class Extrapolator:
         """Returns non stub ASNs from CAIDA graph for use in extrapolation"""
 
         print("Getting non stub ASNs from AS graph")
-        msg = "Removed vantage point from the graph, this will break a lot"
-        assert all(x in non_stub_asns for x in top_vantage_points), msg
         tsv_path = Path.home() / "Desktop" / "caida.tsv"
         bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path).run()
         print("Got non stub asns from AS Graph")
-        return set(as_obj.asn for as_obj in bgp_dag if not as_obj.stub), tsv_path
+        non_stub_asns = set(as_obj.asn for as_obj in bgp_dag if not as_obj.stub)
+        msg = "Removed vantage point from the graph, this will break a lot"
+        assert all(x in non_stub_asns for x in top_vantage_points), msg
+        return non_stub_asns, tsv_path
