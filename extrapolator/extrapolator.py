@@ -17,7 +17,7 @@ from mrt_collector.mrt_collector import get_vantage_point_json
 class Extrapolator:
     def __init__(self, max_block_size: int = 1000):
         self.max_block_size: int = max_block_size
-        self.temp_dir: Path = Path(TemporaryDirectory())
+        self.temp_dir: Path = Path(TemporaryDirectory().name)
 
     def run(self):
         """See steps below
@@ -36,12 +36,12 @@ class Extrapolator:
         # Get the top 10 vantage points to use
         # These must have over 800k prefixes, have num_ans == num_prefixes, and
         # we sort by AS rank
-        top_vantage_points, relevant_paths = self._get_top_vantage_points(collector, 10)
+        top_vantage_points = self._get_top_vantage_points(collector, 10)
         # Get the unique intersecting set of prefix IDs at each top vantage point
         # that don't have path poisoning
-        joint_prefix_ids = self._get_top_vantage_points_prefix_ids(
+        joint_prefix_ids = set(self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
-        )
+        ))
         non_stub_asns, caida_tsv_path = self._get_non_stub_asns_and_caida_path(
             top_vantage_points
         )
@@ -49,20 +49,21 @@ class Extrapolator:
         dirs = self._get_relevant_dirs(collector)
         max_block_id = self._get_max_block_id(dirs)
         for top_vantage_point in top_vantage_points:
+            top_vantage_point_asn = top_vantage_point["asn"]
             for block_id in range(max_block_id + 1):
                 tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
-                out_path = self._get_block_id_guess_path(top_vantage_point, block_id)
+                out_path = self._get_block_id_guess_path(top_vantage_point_asn, block_id)
                 extrapolate(
                     tsv_paths=[str(x) for x in tsv_paths],
                     origin_only_seeding=True,
                     valid_seed_asns=non_stub_asns,
-                    omitted_vantage_point_asns=set([top_vantage_point]),
+                    omitted_vantage_point_asns=set([top_vantage_point_asn]),
                     valid_prefix_ids=joint_prefix_ids,
                     max_prefix_block_id=self.max_block_size,
-                    output_asns=[top_vantage_point],
+                    output_asns=[top_vantage_point_asn],
                     out_path=str(out_path),
                     non_default_asn_cls_str_dict=dict(),
-                    caida_tsv_path=caida_tsv_path,
+                    caida_tsv_path=str(caida_tsv_path),
                 )
                 raise NotImplementedError("modify and use local_ribs_to_tsv_func")
             raise NotImplementedError("Concatenate with header")
@@ -229,7 +230,7 @@ class Extrapolator:
 
         paths = list()
         for dir_ in dirs:
-            path = dir_ / str(self.max_prefix_block_id) / f"{block_id}.tsv"
+            path = dir_ / str(self.max_block_size) / f"{block_id}.tsv"
             assert path.exists(), path
             paths.append(path)
         return paths
@@ -248,7 +249,7 @@ class Extrapolator:
         tsv_path = Path.home() / "Desktop" / "caida.tsv"
         bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path).run()
         print("Got non stub asns from AS Graph")
-        non_stub_asns = set(as_obj.asn for as_obj in bgp_dag if not as_obj.stub)
+        non_stub_asns = set([as_obj.asn for as_obj in bgp_dag if not as_obj.stub])
         msg = "Removed vantage point from the graph, this will break a lot"
         assert all(x in non_stub_asns for x in top_vantage_points), msg
         return non_stub_asns, tsv_path
