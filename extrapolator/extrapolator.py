@@ -60,7 +60,7 @@ class Extrapolator:
                     omitted_vantage_point_asns=set([top_vantage_point_asn]),
                     valid_prefix_ids=joint_prefix_ids,
                     max_prefix_block_id=self.max_block_size,
-                    output_asns=[top_vantage_point_asn],
+                    output_asns=set([top_vantage_point_asn]),
                     out_path=str(out_path),
                     non_default_asn_cls_str_dict=dict(),
                     caida_tsv_path=str(caida_tsv_path),
