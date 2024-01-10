@@ -246,10 +246,11 @@ class Extrapolator:
         """Returns non stub ASNs from CAIDA graph for use in extrapolation"""
 
         print("Getting non stub ASNs from AS graph")
-        tsv_path = Path.home() / "Desktop" / "caida.tsv"
-        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path).run()
+        tsv_path = Path.home() / "Desktop" / "no_stub_caida.tsv"
+        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path, stubs=False).run()
         print("Got non stub asns from AS Graph")
-        non_stub_asns = set([as_obj.asn for as_obj in bgp_dag if not as_obj.stub])
+        # No stubs are left in the graph at this point
+        non_stub_asns = set([as_obj.asn for as_obj in bgp_dag])
         msg = "Removed vantage point from the graph, this will break a lot"
         assert all(x in non_stub_asns for x in top_vantage_points), msg
         return non_stub_asns, tsv_path
