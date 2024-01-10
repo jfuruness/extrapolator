@@ -6,6 +6,7 @@ from typing import Any
 
 from tqdm import tqdm
 
+from bgpy.as_graphs import CAIDAASGraphConstructor
 from bgpy.bgpc import extrapolate
 
 from mrt_collector import MRTCollector
@@ -40,6 +41,9 @@ class Extrapolator:
         joint_prefix_ids = self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
         )
+        non_stub_asns, caida_tsv_path = self._get_non_stub_asns_and_caida_path(
+            top_vantage_points
+        )
 
         dirs = self._get_relevant_dirs(collector)
         max_block_id = self._get_max_block_id(dirs)
@@ -48,38 +52,24 @@ class Extrapolator:
                 tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
                 out_path = self._get_block_id_guess_path(top_vantage_point, block_id)
                 extrapolate(
-                    tsv_path=[str(x) for x in tsv_paths],
-                    prefix_ids=joint_prefix_ids,
+                    tsv_paths=[str(x) for x in tsv_paths],
+                    origin_only_seeding=True,
+                    valid_seed_asns=non_stub_asns,
+                    omitted_vantage_point_asns=set([top_vantage_point])
+                    valid_prefix_ids=joint_prefix_ids,
                     max_prefix_block_id=self.max_block_size,
                     output_asns=[top_vantage_point_asn],
                     out_path=str(out_path),
+                    non_default_asn_cls_str_dict=dict()
+                    caida_tsv_path=caida_tsv_path,
                 )
-                """
-                        //extrapolate(tsv_path, prefix_ids, max_prefix_block_id, output_asns)
-                        //  engine = Engine()
-                        //  announcements = get_announcements_to_extrapolate(tsv_paths, prefix_ids)
-                        //  engine.setup(final_announcements)
-                        //  engine.run()
-                        //  THIS MUST APPEND!!! Can't erase anything!!!
-                        //  engine.local_ribs_to_csv(output_asns, out_path)
-                        //
-                        // get_announcements_to_extrapolate(tsv_paths, prefix_ids)
-                        //   announcements_to_extrapolate = vector()
-                        //   for each path in tsv_paths
-                        //     path_anns = get announcements from path using the function
-                        //     for ann in path_anns:
-                        //        if ann.prefix_id (NOT prefix_block_id) in prefix_ids:
-                        //            announcements_to_extrapolate.push_back(ann)
-                        //   return announcements_to_extrapolate
-                """
-
+                raise NotImplementedError("modify and use local_ribs_to_tsv_func")
             raise NotImplementedError("Concatenate with header")
             raise NotImplementedError("multiprocess with limited cores")
             print("go do pw rn while this is running")
             raise NotImplementedError("calculate levenshtein distance")
         raise NotImplementedError("statistical significance")
 
-        raise NotImplementedError("add top vantage point data to appropriate ppt slide")
         raise NotImplementedError("add to ppt the levenshtein distance")
         raise NotImplementedError("Must deal with seeding conflicts")
         raise NotImplementedError(
@@ -247,3 +237,16 @@ class Extrapolator:
         path = self.temp_dir / str(vantage_point) / "guess" / "temp" / f"{block_id}.tsv"
         path.parent.mkdir(exist_ok=True, parents=True)
         return path
+
+    def _get_non_stub_asns_and_caida_path(
+        self, top_vantage_points: list[int]
+    ) -> tuple[set[int], Path]:
+        """Returns non stub ASNs from CAIDA graph for use in extrapolation"""
+
+        print("Getting non stub ASNs from AS graph")
+        msg = "Removed vantage point from the graph, this will break a lot"
+        assert all(x in non_stub_asns for x in top_vantage_points), msg
+        tsv_path = Path.home() / "Desktop" / "caida.tsv"
+        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path).run()
+        print("Got non stub asns from AS Graph")
+        return set(as_obj.asn for as_obj in bgp_dag if not as_obj.stub), tsv_path
