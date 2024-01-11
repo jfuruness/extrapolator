@@ -59,7 +59,7 @@ class Extrapolator:
             levenshtein_distances = list()
             ground_truth_path_lens = list()
             block_ids = set()
-            for block_id in trange(max_block_id + 1):
+            for block_id in [max_block_id - 1000]:#trange(max_block_id + 1):
                 tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
                 out_path = self._get_block_id_guess_path(
                     top_vantage_point_asn, block_id
@@ -78,7 +78,7 @@ class Extrapolator:
                 )
                 block_ids.add(block_id)
                 # For testing, do at least 2
-                if block_id % 3 == 0:
+                if True:  #block_id % 3 == 0:
                     guess_agg_path = self._concatenate_block_id_guesses(
                         top_vantage_point_asn, max_block_id
                     )
@@ -91,7 +91,7 @@ class Extrapolator:
                         "avg_as_path_len": mean(gt_path_lens)
                     }
                     pprint(stats)
-
+                break
 
             """
             guess_agg_path = self._concatenate_block_id_guesses(
@@ -298,7 +298,13 @@ class Extrapolator:
 
         print("Getting non stub ASNs from AS graph")
         tsv_path = Path.home() / "Desktop" / "no_stub_caida.tsv"
-        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path, stubs=True).run()
+        bgp_dag = CAIDAASGraphConstructor(
+            as_graph_collector_kwargs = {
+                "dl_time": datetime(2023, 12, 12, 0, 0, 0),
+            },
+            tsv_path=tsv_path,
+            stubs=True
+        ).run()
         print("Got non stub asns from AS Graph")
         # No stubs are left in the graph at this point
         non_stub_asns = set([as_obj.asn for as_obj in bgp_dag])
