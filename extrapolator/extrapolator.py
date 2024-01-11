@@ -1,11 +1,16 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import csv
 from datetime import datetime
 import json
 from pathlib import Path
+from pprint import pprint
+import shutil
+from statistics import mean
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from tqdm import tqdm
+import Levenshtein
+from tqdm import tqdm, trange
 
 from bgpy.as_graphs import CAIDAASGraphConstructor
 from bgpy.bgpc import extrapolate
@@ -48,14 +53,20 @@ class Extrapolator:
 
         dirs = self._get_relevant_dirs(collector)
         max_block_id = self._get_max_block_id(dirs)
+        stats = dict()
         for top_vantage_point in top_vantage_points:
             top_vantage_point_asn = top_vantage_point["asn"]
-            for block_id in range(max_block_id + 1):
+            levenshtein_distances = list()
+            ground_truth_path_lens = list()
+            block_ids = set()
+            for block_id in trange(max_block_id + 1):
                 tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
-                out_path = self._get_block_id_guess_path(top_vantage_point_asn, block_id)
+                out_path = self._get_block_id_guess_path(
+                    top_vantage_point_asn, block_id
+                )
                 extrapolate(
                     tsv_paths=[str(x) for x in tsv_paths],
-                    origin_only_seeding=True,
+                    origin_only_seeding=False,
                     valid_seed_asns=non_stub_asns,
                     omitted_vantage_point_asns=set([top_vantage_point_asn]),
                     valid_prefix_ids=joint_prefix_ids,
@@ -65,19 +76,43 @@ class Extrapolator:
                     non_default_asn_cls_str_dict=dict(),
                     caida_tsv_path=str(caida_tsv_path),
                 )
-                raise NotImplementedError("modify and use local_ribs_to_tsv_func")
-            raise NotImplementedError("Concatenate with header")
-            raise NotImplementedError("multiprocess with limited cores")
-            print("go do pw rn while this is running")
-            raise NotImplementedError("calculate levenshtein distance")
+                block_ids.add(block_id)
+                # For testing, do at least 2
+                if block_id % 3 == 0:
+                    guess_agg_path = self._concatenate_block_id_guesses(
+                        top_vantage_point_asn, max_block_id
+                    )
+                    gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
+                    l_distances, gt_path_lens = self._get_levenshtein_dist(
+                        guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
+                    )
+                    stats[top_vantage_point_asn] = {
+                        "avg_l_dist": mean(l_distances),
+                        "avg_as_path_len": mean(gt_path_lens)
+                    }
+                    pprint(stats)
+
+
+            """
+            guess_agg_path = self._concatenate_block_id_guesses(
+                top_vantage_point_asn, max_block_id
+            )
+            gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
+            l_distances, gt_path_lens = self._get_levenshtein_dist(
+                guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
+            )
+            levenshtein_distances.extend(l_distances)
+            ground_truth_path_lens.extend(gt_path_lens)
+            stats[top_vantage_point_asn] = {
+                "avg_l_dist": mean(l_distances),
+                "avg_as_path_len": mean(ground_truth_path_lens)
+            }
+            pprint(stats)
+            """
         raise NotImplementedError("statistical significance")
 
         raise NotImplementedError("add to ppt the levenshtein distance")
         raise NotImplementedError("Must deal with seeding conflicts")
-        raise NotImplementedError(
-            "remove stubs other than vantage point ASN assuming seeing along path is better"
-            "and for origin only seeding, if the stub is missing seed it one higher"
-        )
 
         raise NotImplementedError("run for seeding along as path")
         raise NotImplementedError("run for rov + seeding along the as path")
@@ -148,7 +183,8 @@ class Extrapolator:
             if int(vantage_point) in data:
                 print(f"skipping {vantage_point} since it's already been parsed")
                 continue
-            as_rank = [x for x in top_vantage_points if int(x["asn"]) == int(vantage_point)][0]["as_rank"]
+            as_rank = [x for x in top_vantage_points
+                       if int(x["asn"]) == int(vantage_point)][0]["as_rank"]
             get_path_poisoning = True
             iterable.append(
                 [vantage_point, dirs, as_rank, self.max_block_size, get_path_poisoning]
@@ -240,6 +276,21 @@ class Extrapolator:
         path.parent.mkdir(exist_ok=True, parents=True)
         return path
 
+    def _get_vantage_point_guess_path(self, vantage_point: int) -> Path:
+        path = self.temp_dir / str(vantage_point) / "guess" / "agg.tsv"
+        path.parent.mkdir(exist_ok=True, parents=True)
+        return path
+
+    def _get_vantage_point_gt_path(self, vantage_point: int) -> Path:
+        path = self.temp_dir / str(vantage_point) / "gt" / "agg.tsv"
+        path.parent.mkdir(exist_ok=True, parents=True)
+        return path
+
+    def _get_vantage_point_gt_temp_path(self, vantage_point: int) -> Path:
+        path = self.temp_dir / str(vantage_point) / "gt" / "temp"
+        path.mkdir(exist_ok=True, parents=True)
+        return path
+
     def _get_non_stub_asns_and_caida_path(
         self, top_vantage_points: list[int]
     ) -> tuple[set[int], Path]:
@@ -247,10 +298,135 @@ class Extrapolator:
 
         print("Getting non stub ASNs from AS graph")
         tsv_path = Path.home() / "Desktop" / "no_stub_caida.tsv"
-        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path, stubs=False).run()
+        bgp_dag = CAIDAASGraphConstructor(tsv_path=tsv_path, stubs=True).run()
         print("Got non stub asns from AS Graph")
         # No stubs are left in the graph at this point
         non_stub_asns = set([as_obj.asn for as_obj in bgp_dag])
         msg = "Removed vantage point from the graph, this will break a lot"
         assert all(x in non_stub_asns for x in top_vantage_points), msg
         return non_stub_asns, tsv_path
+
+    def _concatenate_block_id_guesses(
+        self, vantage_point_asn: int, max_block_id: int
+    ) -> Path:
+
+        agg_path = self._get_vantage_point_guess_path(vantage_point_asn)
+        with agg_path.open("w") as agg_f:
+            agg_f.write(
+                "dumping_asn\t"
+                "prefix\t"
+                "as_path\t"
+                "timestamp\t"
+                "seed_asn\t"
+                "roa_valid_length\t"
+                "roa_origin\t"
+                "recv_relationship\t"
+                "withdraw\t"
+                "traceback_end\t"
+                "communities\n"
+            )
+
+            block_id_paths = [self._get_block_id_guess_path(vantage_point_asn, block_id)
+                              for block_id in range(max_block_id + 1)]
+            block_id_paths = [x for x in block_id_paths if x.exists()]
+
+            for path in block_id_paths:
+                with path.open() as f:
+                    shutil.copyfileobj(f, agg_f)
+        return agg_path
+
+    def _get_vantage_point_gt(
+        self, vantage_point: int, collector: MRTCollector
+    ) -> Path:
+
+        mrt_files = collector.get_mrt_files()
+        vantage_points_to_dirs = collector.get_vantage_points_to_dirs(
+            mrt_files, self.max_block_size
+        )
+
+        tmp_dir: Path = self._get_vantage_point_gt_temp_path(vantage_point)
+        agg_path: Path = self._get_vantage_point_gt_path(vantage_point)
+        agg_path.unlink(missing_ok=True)
+        dirs = vantage_points_to_dirs[vantage_point]
+        assert dirs
+
+        # Get header
+        for dir_ in dirs:
+            for formatted_path in (Path(dir_) / str(self.max_block_size)).glob("*.tsv"):
+                with formatted_path.open() as f:
+                    with agg_path.open("w") as agg_path_f:
+                        for line in f:
+                            agg_path_f.write(line)
+                            break
+
+        from subprocess import check_call
+        # Use awk to write temporary files containing the vantage point
+        for dir_ in dirs:
+            print(f"using awk on {dir_}")
+            cmd = ("""find "$ROOT_DIRECTORY" -name '*.tsv' | """
+                   # NOTE: using just 1 core for this
+                   # since we are multiprocessing elsewhere
+                   """xargs -P 1 -I {} """
+                   """sh -c 'awk -F"\t" "\$3 ~ /^asn($| )/" {} """  # noqa
+                   """> '"$TMP_DIR"'"/"""
+                   """$(echo {} | md5sum | cut -d" " -f1).tmp"'""")
+            cmd = cmd.replace("$ROOT_DIRECTORY", str(dir_))
+            cmd = cmd.replace("asn", str(vantage_point))
+            cmd = cmd.replace("$TMP_DIR", str(tmp_dir))
+            check_call(cmd, shell=True)
+        print("combining files")
+        # Combine the files
+        # Get only unique lines or else it will screw up the counts
+        # uniq too slow https://unix.stackexchange.com/a/581324/477240
+        # check_call(f"cat {tmp_dir}/*.tmp | sort | uniq >> {agg_path}", shell=True)
+        check_call(f"cat {tmp_dir}/*.tmp | awk '!x[$0]++' >> {agg_path}", shell=True)
+        print("combined files")
+        return agg_path
+
+    def _get_levenshtein_dist(
+        self,
+        guess_agg_path: Path,
+        gt_agg_path: Path,
+        joint_prefix_ids: set[int],
+        block_ids: set[int]
+    ) -> float:
+        """Returns levenshtein distance"""
+
+        if not isinstance(joint_prefix_ids, set):
+            raise TypeError("Not a set")
+
+        def get_as_path(dct):
+            return tuple([int(x) for x in dct["as_path"].split()])
+
+        guess_prefix_to_as_path = dict()
+        # input(guess_agg_path)
+        with guess_agg_path.open() as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                guess_prefix_to_as_path[row["prefix"]] = get_as_path(row)
+
+        distances = list()
+        gt_path_lens = list()
+        # input(gt_agg_path)
+        with gt_agg_path.open() as f:
+            for row in csv.DictReader(f, delimiter="\t"):
+                if (
+                    int(row["prefix_id"]) in joint_prefix_ids
+                    and int(row["block_id"]) in block_ids
+                ):
+                    guess_as_path = guess_prefix_to_as_path.get(row["prefix"], ())
+                    if guess_as_path == ():
+                        print(f"empty for {row['prefix']}")
+                    gt_as_path = get_as_path(row)
+                    gt_path_lens.append(len(gt_as_path))
+                    # Setting the score cutoff speeds up levenshtein
+                    score_cutoff = max(len(guess_as_path), len(gt_as_path))
+                    # print(gt_as_path)
+                    # print(guess_as_path)
+                    # input()
+                    distances.append(
+                        Levenshtein.distance(
+                            guess_as_path,
+                            gt_as_path,
+                            score_cutoff=score_cutoff)
+                    )
+        return distances, gt_path_lens
