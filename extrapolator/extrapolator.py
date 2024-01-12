@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import csv
 from datetime import datetime
@@ -10,13 +11,15 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import Levenshtein
-from tqdm import tqdm, trange
+from tqdm import tqdm, trange  # noqa
 
 from bgpy.as_graphs import CAIDAASGraphConstructor
+from bgpy.enums import PyRelationships as Relationships
 from bgpy.bgpc import extrapolate
 
 from mrt_collector import MRTCollector
 from mrt_collector.mrt_collector import get_vantage_point_json
+
 
 class Experiment(ABC):
     @property
@@ -28,11 +31,13 @@ class Experiment(ABC):
     def change_kwargs(self, kwargs) -> None:
         raise NotImplementedError
 
+
 class OriginOnlyExperiment(Experiment):
     name = "origin_only"
 
     def change_kwargs(self, kwargs) -> None:
         pass
+
 
 class SeedingAlongPathExperiment(Experiment):
     name = "seeding_along_as_path"
@@ -59,8 +64,13 @@ class SeedingAlongPathWROVAndMHProviderPrefExperiment(Experiment):
 
 
 class Extrapolator:
-    def __init__(self, max_block_size: int = 1000):
+    def __init__(
+        self,
+        max_block_size: int = 100,
+        dl_time: datetime = datetime(2024, 1, 10, 0, 0, 0),
+    ) -> None:
         self.max_block_size: int = max_block_size
+        self.dl_time: datetime = dl_time
         self.temp_dir: Path = Path(TemporaryDirectory().name)
 
     def run(self):
@@ -72,7 +82,7 @@ class Extrapolator:
         2.
         """
 
-        collector = MRTCollector(dl_time=datetime(2023, 12, 12, 0, 0, 0), cpus=1)
+        collector = MRTCollector(dl_time=self.dl_time, cpus=8)
         # This downloads ROV info, hijack info, etc
         # This downloads all MRT RIB dumps and formats them for extrapolation
         # This gets vantage point statistics
@@ -86,8 +96,10 @@ class Extrapolator:
         joint_prefix_ids = set(self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
         ))
-        non_stub_asns, caida_tsv_path, relationships = self._get_non_stub_asns_and_caida_path(
-            top_vantage_points
+        non_stub_asns, caida_tsv_path, relationships = (
+            self._get_non_stub_asns_and_caida_path(
+                top_vantage_points
+            )
         )
 
         dirs = self._get_relevant_dirs(collector)
@@ -95,7 +107,7 @@ class Extrapolator:
         stats = dict()
         for experiment in (
             OriginOnlyExperiment(),
-            SeedAlongPathExperiment(),
+            SeedingAlongPathExperiment(),
             SeedingAlongPathWROVExperiment(),
             SeedingAlongPathWROVAndMHProviderPrefExperiment()
         ):
@@ -105,7 +117,7 @@ class Extrapolator:
                 levenshtein_distances = list()
                 ground_truth_path_lens = list()
                 block_ids = set()
-                for block_id in [max_block_id - 1000]:#trange(max_block_id + 1):
+                for block_id in [max_block_id - 1000]:  # trange(max_block_id + 1):
                     tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
                     out_path = self._get_block_id_guess_path(
                         top_vantage_point_asn, block_id
@@ -126,7 +138,9 @@ class Extrapolator:
                 guess_agg_path = self._concatenate_block_id_guesses(
                     top_vantage_point_asn, max_block_id
                 )
-                gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
+                gt_agg_path = self._get_vantage_point_gt(
+                    top_vantage_point_asn, collector
+                )
                 l_distances, gt_path_lens = self._get_levenshtein_dist(
                     guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
                 )
@@ -134,6 +148,7 @@ class Extrapolator:
                 ground_truth_path_lens.extend(gt_path_lens)
                 from math import sqrt
                 from statistics import stdev
+
                 def get_yerr(trial_data):
                     if len(trial_data) > 1:
                         yerr_num = 1.645 * 2 * stdev(trial_data)
@@ -145,7 +160,7 @@ class Extrapolator:
                 stats[experiment.name][top_vantage_point_asn] = {
                     "avg_l_dist": mean(levenshtein_distances),
                     "avg_l_dist_yerr": get_yerr(levenshtein_distances),
-                    "avg_as_path_len": mean(ground_truth_path_lens)
+                    "avg_as_path_len": mean(ground_truth_path_lens),
                     "avg_as_path_len_yerr": get_yerr(ground_truth_path_lens)
                 }
                 pprint(stats)
@@ -339,8 +354,8 @@ class Extrapolator:
         print("Getting non stub ASNs from AS graph")
         tsv_path = Path.home() / "Desktop" / "no_stub_caida.tsv"
         bgp_dag = CAIDAASGraphConstructor(
-            as_graph_collector_kwargs = {
-                "dl_time": datetime(2023, 12, 12, 0, 0, 0),
+            as_graph_collector_kwargs={
+                "dl_time": self.dl_time,
             },
             tsv_path=tsv_path,
             stubs=True
@@ -350,9 +365,13 @@ class Extrapolator:
         for as_obj in bgp_dag:
             relationships[as_obj.asn] = dict()
             for provider_obj in as_obj.providers:
-                relationships[as_obj.asn][provider_obj.asn] = Relationships.PROVIDERS.value
+                relationships[as_obj.asn][provider_obj.asn] = (
+                    Relationships.PROVIDERS.value
+                )
             for customer_obj in as_obj.customers:
-                relationships[as_obj.asn][customer_obj.asn] = Relationships.CUSTOMERS.value
+                relationships[as_obj.asn][customer_obj.asn] = (
+                    Relationships.CUSTOMERS.value
+                )
             for peer_obj in as_obj.peers:
                 relationships[as_obj.asn][peer_obj.asn] = Relationships.PEERS.value
 
