@@ -18,6 +18,45 @@ from bgpy.bgpc import extrapolate
 from mrt_collector import MRTCollector
 from mrt_collector.mrt_collector import get_vantage_point_json
 
+class Experiment(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
+    def change_kwargs(self, kwargs) -> None:
+        raise NotImplementedError
+
+class OriginOnlyExperiment(Experiment):
+    name = "origin_only"
+
+    def change_kwargs(self, kwargs) -> None:
+        pass
+
+class SeedingAlongPathExperiment(Experiment):
+    name = "seeding_along_as_path"
+
+    def change_kwargs(self, kwargs) -> None:
+        kwargs["origin_only_seeding"] = False
+
+
+class SeedingAlongPathWROVExperiment(Experiment):
+    name = "seeding_along_as_path_w_rov"
+
+    def change_kwargs(self, kwargs) -> None:
+        kwargs["origin_only_seeding"] = False
+        raise NotImplementedError("Non default asn cls dict")
+
+
+class SeedingAlongPathWROVAndMHProviderPrefExperiment(Experiment):
+    name = "seeding_along_as_path_w_rov_and_mh_provider_pre"
+
+    def change_kwargs(self, kwargs) -> None:
+        kwargs["origin_only_seeding"] = False
+        raise NotImplementedError("Non default asn cls dict")
+        raise NotImplementedError("mh provider pref")
+
 
 class Extrapolator:
     def __init__(self, max_block_size: int = 1000):
@@ -47,68 +86,69 @@ class Extrapolator:
         joint_prefix_ids = set(self._get_top_vantage_points_prefix_ids(
             collector, top_vantage_points
         ))
-        non_stub_asns, caida_tsv_path = self._get_non_stub_asns_and_caida_path(
+        non_stub_asns, caida_tsv_path, relationships = self._get_non_stub_asns_and_caida_path(
             top_vantage_points
         )
 
         dirs = self._get_relevant_dirs(collector)
         max_block_id = self._get_max_block_id(dirs)
         stats = dict()
-        for top_vantage_point in top_vantage_points:
-            top_vantage_point_asn = top_vantage_point["asn"]
-            levenshtein_distances = list()
-            ground_truth_path_lens = list()
-            block_ids = set()
-            for block_id in [max_block_id - 1000]:#trange(max_block_id + 1):
-                tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
-                out_path = self._get_block_id_guess_path(
-                    top_vantage_point_asn, block_id
-                )
-                extrapolate(
-                    tsv_paths=[str(x) for x in tsv_paths],
-                    origin_only_seeding=False,
-                    valid_seed_asns=non_stub_asns,
-                    omitted_vantage_point_asns=set([top_vantage_point_asn]),
-                    valid_prefix_ids=joint_prefix_ids,
-                    max_prefix_block_id=self.max_block_size,
-                    output_asns=set([top_vantage_point_asn]),
-                    out_path=str(out_path),
-                    non_default_asn_cls_str_dict=dict(),
-                    caida_tsv_path=str(caida_tsv_path),
-                )
-                block_ids.add(block_id)
-                # For testing, do at least 2
-                if True:  #block_id % 3 == 0:
-                    guess_agg_path = self._concatenate_block_id_guesses(
-                        top_vantage_point_asn, max_block_id
+        for experiment in (
+            OriginOnlyExperiment(),
+            SeedAlongPathExperiment(),
+            SeedingAlongPathWROVExperiment(),
+            SeedingAlongPathWROVAndMHProviderPrefExperiment()
+        ):
+            stats[experiment.name] = dict()
+            for top_vantage_point in top_vantage_points:
+                top_vantage_point_asn = top_vantage_point["asn"]
+                levenshtein_distances = list()
+                ground_truth_path_lens = list()
+                block_ids = set()
+                for block_id in [max_block_id - 1000]:#trange(max_block_id + 1):
+                    tsv_paths = self._get_tsv_paths_for_block_id(dirs, block_id)
+                    out_path = self._get_block_id_guess_path(
+                        top_vantage_point_asn, block_id
                     )
-                    gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
-                    l_distances, gt_path_lens = self._get_levenshtein_dist(
-                        guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
+                    extrapolate(
+                        tsv_paths=[str(x) for x in tsv_paths],
+                        origin_only_seeding=False,
+                        valid_seed_asns=non_stub_asns,
+                        omitted_vantage_point_asns=set([top_vantage_point_asn]),
+                        valid_prefix_ids=joint_prefix_ids,
+                        max_prefix_block_id=self.max_block_size,
+                        output_asns=set([top_vantage_point_asn]),
+                        out_path=str(out_path),
+                        non_default_asn_cls_str_dict=dict(),
+                        caida_tsv_path=str(caida_tsv_path),
                     )
-                    stats[top_vantage_point_asn] = {
-                        "avg_l_dist": mean(l_distances),
-                        "avg_as_path_len": mean(gt_path_lens)
-                    }
-                    pprint(stats)
-                break
+                    block_ids.add(block_id)
+                guess_agg_path = self._concatenate_block_id_guesses(
+                    top_vantage_point_asn, max_block_id
+                )
+                gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
+                l_distances, gt_path_lens = self._get_levenshtein_dist(
+                    guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
+                )
+                levenshtein_distances.extend(l_distances)
+                ground_truth_path_lens.extend(gt_path_lens)
+                from math import sqrt
+                from statistics import stdev
+                def get_yerr(trial_data):
+                    if len(trial_data) > 1:
+                        yerr_num = 1.645 * 2 * stdev(trial_data)
+                        yerr_denom = sqrt(len(trial_data))
+                        return float(yerr_num / yerr_denom)
+                    else:
+                        return 0
 
-            """
-            guess_agg_path = self._concatenate_block_id_guesses(
-                top_vantage_point_asn, max_block_id
-            )
-            gt_agg_path = self._get_vantage_point_gt(top_vantage_point_asn, collector)
-            l_distances, gt_path_lens = self._get_levenshtein_dist(
-                guess_agg_path, gt_agg_path, joint_prefix_ids, block_ids
-            )
-            levenshtein_distances.extend(l_distances)
-            ground_truth_path_lens.extend(gt_path_lens)
-            stats[top_vantage_point_asn] = {
-                "avg_l_dist": mean(l_distances),
-                "avg_as_path_len": mean(ground_truth_path_lens)
-            }
-            pprint(stats)
-            """
+                stats[experiment.name][top_vantage_point_asn] = {
+                    "avg_l_dist": mean(levenshtein_distances),
+                    "avg_l_dist_yerr": get_yerr(levenshtein_distances),
+                    "avg_as_path_len": mean(ground_truth_path_lens)
+                    "avg_as_path_len_yerr": get_yerr(ground_truth_path_lens)
+                }
+                pprint(stats)
         raise NotImplementedError("statistical significance")
 
         raise NotImplementedError("add to ppt the levenshtein distance")
@@ -305,12 +345,23 @@ class Extrapolator:
             tsv_path=tsv_path,
             stubs=True
         ).run()
+
+        relationships = dict()
+        for as_obj in bgp_dag:
+            relationships[as_obj.asn] = dict()
+            for provider_obj in as_obj.providers:
+                relationships[as_obj.asn][provider_obj.asn] = Relationships.PROVIDERS.value
+            for customer_obj in as_obj.customers:
+                relationships[as_obj.asn][customer_obj.asn] = Relationships.CUSTOMERS.value
+            for peer_obj in as_obj.peers:
+                relationships[as_obj.asn][peer_obj.asn] = Relationships.PEERS.value
+
         print("Got non stub asns from AS Graph")
         # No stubs are left in the graph at this point
         non_stub_asns = set([as_obj.asn for as_obj in bgp_dag])
         msg = "Removed vantage point from the graph, this will break a lot"
         assert all(x in non_stub_asns for x in top_vantage_points), msg
-        return non_stub_asns, tsv_path
+        return non_stub_asns, tsv_path, relationships
 
     def _concatenate_block_id_guesses(
         self, vantage_point_asn: int, max_block_id: int
